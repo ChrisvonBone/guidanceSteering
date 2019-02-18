@@ -218,7 +218,7 @@ function GlobalPositioningSystem:onLoad(savegame)
 
     GlobalPositioningSystem.registerMultiPurposeActionEvents(self)
 
-    spec.stateMachine = GuidanceFSMUtil.createStateMachineForObject(self)
+    spec.stateMachine = FSMContext:new(self)
 end
 
 function GlobalPositioningSystem:onPostLoad(savegame)
@@ -522,9 +522,9 @@ function GlobalPositioningSystem:onUpdate(dt)
         return
     end
 
-    spec.stateMachine:update(dt)
-
     if guidanceSteeringIsActive then
+        spec.stateMachine:update(dt)
+
         --GlobalPositioningSystem.guideSteering(self, dt)
         --
         --spec.headlandProcessor:handle(dt)
