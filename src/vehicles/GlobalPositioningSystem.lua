@@ -19,8 +19,8 @@ GlobalPositioningSystem.DIRECTION_RIGHT = 1
 GlobalPositioningSystem.AB_DROP_DISTANCE = 15
 
 -- For changing width and shifting the track
-GlobalPositioningSystem.MAX_INPUT_MULTIPLIER = 10
-GlobalPositioningSystem.INPUT_MULTIPLIER_STEP = 0.003
+GlobalPositioningSystem.MAX_INPUT_MULTIPLIER = 20
+GlobalPositioningSystem.INPUT_MULTIPLIER_STEP = 0.005
 
 function GlobalPositioningSystem.prerequisitesPresent(specializations)
     return SpecializationUtil.hasSpecialization(Drivable, specializations)
@@ -36,10 +36,12 @@ function GlobalPositioningSystem.registerFunctions(vehicleType)
     SpecializationUtil.registerFunction(vehicleType, "onResetGuidanceData", GlobalPositioningSystem.onResetGuidanceData)
     SpecializationUtil.registerFunction(vehicleType, "onCreateGuidanceData", GlobalPositioningSystem.onCreateGuidanceData)
     SpecializationUtil.registerFunction(vehicleType, "onUpdateGuidanceData", GlobalPositioningSystem.onUpdateGuidanceData)
+    SpecializationUtil.registerFunction(vehicleType, "onSteeringStateChanged", GlobalPositioningSystem.onSteeringStateChanged)
 end
 
 function GlobalPositioningSystem.registerOverwrittenFunctions(vehicleType)
     SpecializationUtil.registerOverwrittenFunction(vehicleType, "getIsVehicleControlledByPlayer", GlobalPositioningSystem.inj_getIsVehicleControlledByPlayer)
+    SpecializationUtil.registerOverwrittenFunction(vehicleType, "loadDynamicallyPartsFromXML", GlobalPositioningSystem.inj_loadDynamicallyPartsFromXML)
 end
 
 function GlobalPositioningSystem.registerEventListeners(vehicleType)
@@ -54,6 +56,13 @@ function GlobalPositioningSystem.registerEventListeners(vehicleType)
     SpecializationUtil.registerEventListener(vehicleType, "onDraw", GlobalPositioningSystem)
     SpecializationUtil.registerEventListener(vehicleType, "onEnterVehicle", GlobalPositioningSystem)
     SpecializationUtil.registerEventListener(vehicleType, "onLeaveVehicle", GlobalPositioningSystem)
+    SpecializationUtil.registerEventListener(vehicleType, "onHeadlandStart", GlobalPositioningSystem)
+    SpecializationUtil.registerEventListener(vehicleType, "onHeadlandEnd", GlobalPositioningSystem)
+end
+
+function GlobalPositioningSystem.registerEvents(vehicleType)
+    SpecializationUtil.registerEvent(vehicleType, "onHeadlandStart")
+    SpecializationUtil.registerEvent(vehicleType, "onHeadlandEnd")
 end
 
 function GlobalPositioningSystem:onRegisterActionEvents(isActiveForInput, isActiveForInputIgnoreSelection)
@@ -133,6 +142,18 @@ function GlobalPositioningSystem:onLoad(savegame)
         return node
     end
 
+    if self.isClient then
+        local xmlFile = loadXMLFile("GuidanceSounds", Utils.getFilename("resources/sounds.xml", g_guidanceSteering.modDirectory))
+        if xmlFile ~= nil then
+            spec.samples = {}
+            spec.samples.activate = g_soundManager:loadSampleFromXML(xmlFile, "sounds", "activate", g_guidanceSteering.modDirectory, self.components, 1, AudioGroup.VEHICLE, self.i3dMappings, self)
+            spec.samples.deactivate = g_soundManager:loadSampleFromXML(xmlFile, "sounds", "deactivate", g_guidanceSteering.modDirectory, self.components, 1, AudioGroup.VEHICLE, self.i3dMappings, self)
+            spec.samples.warning = g_soundManager:loadSampleFromXML(xmlFile, "sounds", "warning", g_guidanceSteering.modDirectory, self.components, 1, AudioGroup.VEHICLE, self.i3dMappings, self)
+
+            delete(xmlFile)
+        end
+    end
+
     spec.guidanceNode = createGuideNode("guidance_node", false)
     spec.guidanceTargetNode = createGuideNode("guidance_reverse_node", true)
 
@@ -201,6 +222,16 @@ function GlobalPositioningSystem:onLoad(savegame)
 end
 
 function GlobalPositioningSystem:onPostLoad(savegame)
+    local spec = self:guidanceSteering_getSpecTable("globalPositioningSystem")
+    local parts = self.spec_dynamicallyLoadedParts.parts
+
+    if parts ~= nil then
+        for _, part in pairs(parts) do
+            if part.linkNode ~= nil then
+                setVisibility(part.linkNode, spec.hasGuidanceSystem)
+            end
+        end
+    end
 end
 
 function GlobalPositioningSystem:onReadStream(streamId, connection)
@@ -288,6 +319,9 @@ function GlobalPositioningSystem:onDelete()
     delete(spec.guidanceTargetNode)
 
     -- Remove sounds
+    if self.isClient then
+        g_soundManager:deleteSamples(spec.samples)
+    end
 end
 
 function GlobalPositioningSystem.updateNetworkInputs(self)
@@ -523,6 +557,21 @@ function GlobalPositioningSystem.inj_getIsVehicleControlledByPlayer(vehicle, sup
     return superFunc(vehicle)
 end
 
+function GlobalPositioningSystem.inj_loadDynamicallyPartsFromXML(vehicle, superFunc, dynamicallyLoadedPart, xmlFile, key)
+    local ret = superFunc(vehicle, dynamicallyLoadedPart, xmlFile, key)
+    if ret then
+        local function isSharedStarFire(path)
+            return path:lower() == "$data/shared/assets/starfire.i3d"
+        end
+
+        if isSharedStarFire(dynamicallyLoadedPart.filename) then
+            dynamicallyLoadedPart.linkNode = I3DUtil.indexToObject(vehicle.components, Utils.getNoNil(getXMLString(xmlFile, key .. "#linkNode"), "0>"), vehicle.i3dMappings)
+        end
+    end
+
+    return ret
+end
+
 function GlobalPositioningSystem:onLeaveVehicle()
     if self.isClient then
         if self:getHasGuidanceSystem() and self == g_currentMission.controlledVehicle then
@@ -733,6 +782,43 @@ function GlobalPositioningSystem:onUpdateGuidanceData(guidanceData)
     Logger.info("onUpdateGuidanceData")
 end
 
+function GlobalPositioningSystem:onSteeringStateChanged(isActive)
+    local spec = self:guidanceSteering_getSpecTable("globalPositioningSystem")
+    if isActive then
+        spec.stateMachine:reset()
+    end
+
+    if not self.isClient then
+        return
+    end
+
+    local sample = spec.samples.activate
+    if not isActive then
+        sample = spec.samples.deactivate
+    end
+
+    g_soundManager:playSample(sample)
+end
+
+function GlobalPositioningSystem:onHeadlandStart()
+    if not self.isClient then
+        return
+    end
+
+    local spec = self:guidanceSteering_getSpecTable("globalPositioningSystem")
+
+    g_soundManager:playSample(spec.samples.warning)
+end
+
+function GlobalPositioningSystem:onHeadlandEnd()
+    if not self.isClient then
+        return
+    end
+
+    local spec = self:guidanceSteering_getSpecTable("globalPositioningSystem")
+    g_soundManager:stopSample(spec.samples.warning)
+end
+
 function GlobalPositioningSystem.guideSteering(vehicle, dt)
     if vehicle.isHired then
         -- Disallow when AI is active
@@ -833,13 +919,7 @@ function GlobalPositioningSystem.actionEventEnableSteering(self, actionName, inp
         g_currentMission:showBlinkingWarning(g_i18n:getText("guidanceSteering_warning_createTrackFirst"), 2000)
     else
         spec.lastInputValues.guidanceSteeringIsActive = not spec.lastInputValues.guidanceSteeringIsActive
-
-        -- Todo: place holder to trigger the stateMachine
-        if spec.lastInputValues.guidanceSteeringIsActive then
-            spec.stateMachine:setState(GuidanceFSMUtil.FOLLOW_LINE_STATE)
-        else
-            spec.stateMachine:reset()
-        end
+        self:onSteeringStateChanged(spec.lastInputValues.guidanceSteeringIsActive)
         Logger.info("guidanceSteeringIsActive", spec.lastInputValues.guidanceSteeringIsActive)
     end
 end
