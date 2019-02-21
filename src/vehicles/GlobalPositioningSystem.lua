@@ -162,13 +162,9 @@ function GlobalPositioningSystem:onLoad(savegame)
     spec.showGuidanceLines = true
     spec.guidanceSteeringIsActive = false
     spec.guidanceTerrainAngleIsActive = false
-
     spec.shiftParallel = false
 
     spec.abDistanceCounter = 0
-
-    -- Processor to handle actions on the headland
-    spec.headlandProcessor = HeadlandProcessor:new(self)
 
     spec.lastInputValues = {}
     spec.lastInputValues.guidanceIsActive = true -- todo: make toggle
@@ -465,7 +461,7 @@ function GlobalPositioningSystem:onUpdate(dt)
 
     local drivingDirection = self:getDrivingDirection()
     local guidanceSteeringIsActive = spec.guidanceSteeringIsActive
-    local x, y, z, driveDirX, driveDirZ = unpack(data.driveTarget)
+    local x, _, z, driveDirX, driveDirZ = unpack(data.driveTarget)
 
     -- Only compute when the vehicle is moving
     if drivingDirection ~= 0 or spec.shiftParallel then
@@ -798,6 +794,7 @@ function GlobalPositioningSystem:onSteeringStateChanged(isActive)
 end
 
 function GlobalPositioningSystem:onHeadlandStart()
+    -- Todo: do we need it.
     if not self.isClient then
         return
     end
@@ -808,54 +805,13 @@ function GlobalPositioningSystem:onHeadlandStart()
 end
 
 function GlobalPositioningSystem:onHeadlandEnd()
+    -- Todo: do we need it.
     if not self.isClient then
         return
     end
 
     local spec = self:guidanceSteering_getSpecTable("globalPositioningSystem")
     g_soundManager:stopSample(spec.samples.warning)
-end
-
-function GlobalPositioningSystem.guideSteering(vehicle, dt)
-    if vehicle.isHired then
-        -- Disallow when AI is active
-        return
-    end
-
-    local spec = vehicle:guidanceSteering_getSpecTable("globalPositioningSystem")
-    -- data
-    local data = spec.guidanceData
-
-    local guidanceNode = spec.guidanceNode
-    local snapDirX, snapDirZ, snapX, snapZ = unpack(data.snapDirection)
-    local dX, dY, dZ = unpack(data.driveTarget)
-    local lineXDir = data.snapDirectionMultiplier * snapDirX
-    local lineZDir = data.snapDirectionMultiplier * snapDirZ
-    -- Calculate target points
-    local x1 = dX + data.width * snapDirZ * data.alphaRad
-    local z1 = dZ - data.width * snapDirX * data.alphaRad
-    local step = 5 -- m
-    local tX = x1 + step * lineXDir
-    local tZ = z1 + step * lineZDir
-
-    if spec.showGuidanceLines then
-        DebugUtil.drawDebugCircle(tX, dY + .2, tZ, .5, 10, { 0, 1, 0 })
-    end
-
-    local pX, _, pZ = worldToLocal(guidanceNode, tX, dY, tZ)
-
-    DriveUtil.driveToPoint(vehicle, dt, pX, pZ)
-
-    local drivable_spec = vehicle:guidanceSteering_getSpecTable("drivable")
-    -- lock max speed to working tool
-    local speed, _ = vehicle:getSpeedLimit(true)
-    if drivable_spec.cruiseControl.state == Drivable.CRUISECONTROL_STATE_ACTIVE then
-        speed = math.min(speed, drivable_spec.cruiseControl.speed)
-    end
-
-    vehicle:getMotor():setSpeedLimit(speed)
-
-    DriveUtil.accelerateInDirection(vehicle, drivable_spec.axisForward, dt)
 end
 
 function GlobalPositioningSystem.shiftParallel(data, dt, direction)
